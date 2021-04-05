@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python2
 # coding: utf-8
 """Convert CityGML buildings to PostreSQL statements for insersion in table
 
@@ -37,6 +37,19 @@ def gmlLinearRing2wkt(ring, dim):
     assert len(coord) >= 4
     return "("+",".join([" ".join(c) for c in coord])+")"
 
+def trans(rings):
+    new_rings = []
+    for ring in rings:
+        new_ring = '('
+        points = re.split(',', ring.lstrip('(').rstrip(')'))
+        for point in points:
+            s = re.split(' ', point)
+            new_ring += s[1] + " " + s[0] + ","
+        new_ring = new_ring.rstrip(',')
+        new_ring += ')'
+        new_rings.append(new_ring)
+    return new_rings
+
 def gmlPolygon2wkt(poly, dim):
     dim = int(poly.get("srsDimension")) if poly.get("srsDimension") else dim
     rings = filter(None, [gmlLinearRing2wkt(ring, dim) \
@@ -45,7 +58,7 @@ def gmlPolygon2wkt(poly, dim):
         sys.stderr.write( 'degenerated Polygon gml:id="'+\
                 poly.get("{http://www.opengis.net/gml}id")+'"\n')
         return None
-    return "("+",".join(rings)+")"
+    return ",".join(trans(rings))
 
 def findNamespaceFor(elmentName, root):
     for e in root.iter():
@@ -74,7 +87,7 @@ def buildingGeomTypes(root, lods=range(3)):
     return types
 
 
-def citygml2pgsql(filename, table_name, srid, lod, geometry_column="geom", building_id_column="building_id"):
+def citygml2pgsql(filename, table_name, srid, lod, geometry_column="geom", building_id_column="building_id", height_column="height"):
     if not os.path.exists(filename):
         raise RuntimeError("error: cannot find "+filename)
 
@@ -85,8 +98,10 @@ def citygml2pgsql(filename, table_name, srid, lod, geometry_column="geom", build
     geom_types = buildingGeomTypes(root, [lod])
 
     for building in root.iter(fullName("Building", root)):
-    	building_id = building.attrib["{http://www.opengis.net/gml}id"]
-    	building_polys = []
+        a = fullName("measuredHeight", building)
+        measuredHeight = '1' if a == None else building.findtext(fullName("measuredHeight", building))
+        building_id = building.attrib["{http://www.opengis.net/gml}id"]
+        building_polys = []
         for geom_type in geom_types:
             for geom in building.iter(geom_type):
                 dim = int(geom.get("srsDimension")) if geom.get("srsDimension") else None
@@ -94,10 +109,11 @@ def citygml2pgsql(filename, table_name, srid, lod, geometry_column="geom", build
                             for poly in geom.iter(fullName("Polygon", building))])
                 building_polys = building_polys + polys
         if len(building_polys) != 0:
-            print "INSERT INTO "+table_name+"("+geometry_column + "," + building_id_column + ") VALUES ("\
+            srid = 6668
+            print "INSERT INTO "+table_name+"("+geometry_column + "," + building_id_column + "," + height_column + ") VALUES ("\
                   "'SRID="+str(srid)+\
-                    "; MULTIPOLYGON("+",".join(building_polys)+\
-                    ")'::geometry, '" + str(building_id) + "' );"
+                    "; POLYGON("+",".join(building_polys)+")"+\
+                    "'::geometry, '" + str(building_id) + "', " + measuredHeight + ");"
         else:
             sys.stderr.write( 'degenerated '+geom+' gml:id="'+\
                     geom.get("{http://www.opengis.net/gml}id")+'"\n')
